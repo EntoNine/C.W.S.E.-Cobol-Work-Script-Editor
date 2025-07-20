@@ -8,6 +8,11 @@ A simple ncurses-based editor for COBOL scripts.
 
 ![Program Preview](preview.png)
 
+## Terminal Compatibility
+
+**Note:** CWSE may be unstable or have display issues with certain terminals, such as `gnome-terminal`.  
+For best results, use [Sakura terminal](https://github.com/maehne/sakura) which has been tested and works reliably.
+
 ## Features
 
 - Line-numbered editing for COBOL scripts
@@ -62,4 +67,4 @@ This project is licensed under the MIT License.
 
 ## Credits
 
-Developed by [ENTO9].  
+Developed by Ento9.  
