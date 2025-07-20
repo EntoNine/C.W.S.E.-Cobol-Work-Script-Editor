@@ -11,7 +11,7 @@ A simple ncurses-based editor for COBOL scripts.
 ## Terminal Compatibility
 
 **Note:** CWSE may be unstable or have display issues with certain terminals, such as `gnome-terminal`.  
-For best results, use [Sakura terminal](https://github.com/maehne/sakura) which has been tested and works reliably.
+For best results, use [Sakura terminal](https://community.linuxmint.com/software/view/sakura) which has been tested and works reliably.
 
 ## Features
 
