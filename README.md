@@ -62,5 +62,4 @@ This project is licensed under the MIT License.
 
 ## Credits
 
-Developed by [Your Name].  
-Logo and preview images by [Your Name or Source].
+Developed by [ENTO9].  
