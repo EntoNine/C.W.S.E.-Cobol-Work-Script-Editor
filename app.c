@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <signal.h>
 
-#define MAX_LINES 100000
-#define MAX_COLS 71
+#define MAX_LINES 999999
+#define MAX_COLS 65
 #define FIXED_COLS 7
 
 typedef struct {
@@ -48,7 +49,7 @@ void load_file(const char *path) {
         rtrim(line);
         int len = strlen(line);
         if (len < 7) {
-            // Ligne courte ou vide -> colonne commentaire vide + contenu vide
+            // Short or empty line -> empty comment column + empty content
             lines[num_lines].comment_col = ' ';
             lines[num_lines].content[0] = '\0';
         } else {
@@ -79,7 +80,7 @@ void insert_structure_now() {
         rtrim(line);
         int len = strlen(line);
         if (len < 7) {
-            // Ligne courte ou vide -> colonne commentaire vide + contenu vide
+            // Short or empty line -> empty comment column + empty content
             lines[num_lines].comment_col = ' ';
             lines[num_lines].content[0] = '\0';
         } else {
@@ -97,7 +98,7 @@ void insert_structure_now() {
 }
 
 void insert_line(int index) {
-    if (num_lines >= MAX_LINES) return; // limite atteinte
+    if (num_lines >= MAX_LINES) return; // Maximum limit reached
 
     for (int i = num_lines; i > index; i--) {
         lines[i] = lines[i - 1];
@@ -108,9 +109,9 @@ void insert_line(int index) {
     num_lines++;
 }
 
-// delete_line retourne la nouvelle position du curseur
+// delete_line returns the new cursor position
 int delete_line(int index) {
-    if (num_lines <= 1) return cur_line;  // Ne supprime pas si une seule ligne
+    if (num_lines <= 1) return cur_line;  // Don't delete if only one line
 
     for (int i = index; i < num_lines - 1; i++) {
         lines[i] = lines[i + 1];
@@ -118,25 +119,178 @@ int delete_line(int index) {
     num_lines--;
 
     if (num_lines == 0) {
-        // Sécurité : jamais vide, on recrée une ligne vide
+        // Safety: never empty, recreate an empty line
         lines[0].comment_col = ' ';
         lines[0].content[0] = '\0';
         num_lines = 1;
         return 0;
     }
 
-    // Si on supprime la première ligne, on reste sur la ligne 0
+    // If deleting the first line, stay on line 0
     if (index == 0) {
         return 0;
     } else {
-        // Sinon on revient sur la ligne précédente
+        // Otherwise go back to the previous line
         return index - 1;
     }
 }
 
+void show_run_output(const char *output) {
+    int win_height = LINES / 2;
+    int win_width = COLS - 4;
+    int starty = (LINES - win_height) / 2;
+    int startx = 2;
+    WINDOW *popup = newwin(win_height, win_width, starty, startx);
+    wbkgd(popup, COLOR_PAIR(4));
+    box(popup, 0, 0);
+    mvwprintw(popup, 0, 2, " Output (F12:Run) - [UP/DOWN] Scroll, F4 to quit ");
+
+    // Split output into lines
+    char *lines[1024];
+    int nlines = 0;
+    char *buf = strdup(output);
+    char *p = buf;
+    while (p && nlines < 1024) {
+        char *nl = strchr(p, '\n');
+        if (nl) {
+            *nl = '\0';
+            lines[nlines++] = p;
+            p = nl + 1;
+        } else {
+            lines[nlines++] = p;
+            break;
+        }
+    }
+
+    int scroll = 0;
+    int max_scroll = (nlines > win_height - 2) ? nlines - (win_height - 2) : 0;
+    int ch;
+    keypad(popup, TRUE);
+    do {
+        werase(popup);
+        box(popup, 0, 0);
+        mvwprintw(popup, 0, 2, " Output (F12:Run) - [UP/DOWN] Scroll, F4 to quit ");
+        for (int i = 0; i < win_height - 2; i++) {
+            if (i + scroll < nlines)
+                mvwprintw(popup, i + 1, 2, "%s", lines[i + scroll]);
+        }
+        wrefresh(popup);
+        ch = wgetch(popup);
+        if ((ch == KEY_DOWN || ch == 'j') && scroll < max_scroll) scroll++;
+        if ((ch == KEY_UP || ch == 'k') && scroll > 0) scroll--;
+    } while (ch != KEY_F(4));
+
+    delwin(popup);
+    free(buf);
+}
+
+void save_file(); // Forward declaration before run_script_with_gnu_cobol()
+
+void run_script_with_gnu_cobol() {
+    save_file();
+    char safe_filename[236];
+    strncpy(safe_filename, filename, 235);
+    safe_filename[235] = '\0';
+    const char *bin_name = "cwse_run_bin";
+    char compile_cmd[512];
+    snprintf(compile_cmd, sizeof(compile_cmd),
+        "cobc -x -o %s \"%s\" 2>&1", bin_name, safe_filename);
+
+    // Compilation with error capture
+    FILE *fp = popen(compile_cmd, "r");
+    if (!fp) {
+        show_run_output("Failed to run compiler.");
+        return;
+    }
+    char compile_output[4096] = {0};
+    size_t offset = 0;
+    while (fgets(compile_output + offset, sizeof(compile_output) - offset, fp)) {
+        offset = strlen(compile_output);
+        if (offset >= sizeof(compile_output) - 1) break;
+    }
+    int compile_status = pclose(fp);
+
+    if (compile_status != 0) {
+        show_run_output(compile_output[0] ? compile_output : "COBOL compilation error.");
+        return;
+    }
+
+    // Exit ncurses to allow COBOL program interactivity
+    endwin();
+    printf("\033[2J\033[H"); // Clear screen and move cursor to top-left
+    printf("\n--- COBOL program execution ---\n");
+    printf("(Press Enter after the end to return to the editor)\n\n");
+    char run_cmd[256];
+    snprintf(run_cmd, sizeof(run_cmd), "./%s", bin_name);
+    system(run_cmd);
+    printf("\n--- End of COBOL execution ---\n");
+    printf("Press Enter to return to the editor...");
+    getchar();
+
+    // Cleanup binary
+    char rm_cmd[256];
+    snprintf(rm_cmd, sizeof(rm_cmd), "rm -f %s", bin_name);
+    system(rm_cmd);
+
+    // Restart ncurses
+    refresh();
+    initscr();
+    printf("\033[2J\033[H"); // Clear terminal after ncurses is re-initialized
+    noecho();
+    cbreak();
+    keypad(stdscr, TRUE);
+    curs_set(1);
+    start_color();
+    scrollok(stdscr, TRUE);
+    idlok(stdscr, TRUE);
+
+    // Reinitialize colors if needed
+    init_pair(1, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(2, COLOR_CYAN, COLOR_BLACK);
+    init_pair(3, COLOR_RED, COLOR_BLACK);
+    init_pair(4, COLOR_WHITE, COLOR_BLACK);
+    init_pair(5, COLOR_GREEN, COLOR_BLACK);
+    init_pair(6, COLOR_MAGENTA, COLOR_BLACK); // Strings
+    init_pair(7, COLOR_BLUE, COLOR_BLACK);    // Keywords
+    init_pair(8, COLOR_GREEN, COLOR_BLACK);   // Numbers
+}
+
+void show_menu_popup() {
+    int win_height = 10;
+    int win_width = 40;
+    int starty = (LINES - win_height) / 2;
+    int startx = (COLS - win_width) / 2;
+    WINDOW *menu = newwin(win_height, win_width, starty, startx);
+    wbkgd(menu, COLOR_PAIR(4));
+    box(menu, 0, 0);
+    mvwprintw(menu, 1, 2, " CWSE Menu (F5 to close) ");
+    mvwprintw(menu, 3, 4, "1. Future Functionality");
+    mvwprintw(menu, 4, 4, "2. Future Functionality");
+    mvwprintw(menu, 5, 4, "3. Future Functionality");
+    mvwprintw(menu, 6, 4, "4. Future Functionality");
+    mvwprintw(menu, 8, 4, "Press F5 to close.");
+    wrefresh(menu);
+
+    int ch;
+    keypad(menu, TRUE);
+    do {
+        ch = wgetch(menu);
+    } while (ch != KEY_F(5));
+    delwin(menu);
+}
+
 void draw_header() {
     attron(COLOR_PAIR(4));
-    mvprintw(0, 0, "CWSE - Cobol Work Script Editor");
+    mvprintw(0, 0, "C.W.S.E. V0.2 ");
+    // F5:MENU and F12:Run top-right
+    int run_label_col = COLS - 13;
+    int menu_label_col = run_label_col - 13;
+    attron(COLOR_PAIR(4) | A_REVERSE);
+    mvprintw(0, menu_label_col, " F5: MENU ");
+    attroff(A_REVERSE | COLOR_PAIR(4));
+    attron(COLOR_PAIR(4) | A_REVERSE);
+    mvprintw(0, run_label_col, " F12: Run ");
+    attroff(A_REVERSE | COLOR_PAIR(4));
     clrtoeol();
     attroff(COLOR_PAIR(4));
     attron(A_BOLD | COLOR_PAIR(5));
@@ -196,18 +350,74 @@ void draw_lines() {
         mvaddch(3 + i, 6, lines[actual].comment_col);
         attroff(COLOR_PAIR(3));
 
-        if (lines[actual].comment_col == '*')
-            attron(COLOR_PAIR(2));
-        else
-            attron(COLOR_PAIR(1));
+        // Syntax highlighting for content
+        int x = FIXED_COLS;
+        const char *s = lines[actual].content;
+        int in_string = 0;
+        char string_char = 0;
+        while (*s && x < FIXED_COLS + MAX_COLS) {
+            // Check for string start/end
+            if (!in_string && (*s == '"' || *s == '\'')) {
+                in_string = 1;
+                string_char = *s;
+                attron(COLOR_PAIR(6));
+                mvaddch(3 + i, x++, *s++);
+                continue;
+            }
+            if (in_string) {
+                attron(COLOR_PAIR(6));
+                mvaddch(3 + i, x, *s);
+                if (*s == string_char) {
+                    in_string = 0;
+                    attroff(COLOR_PAIR(6));
+                }
+                x++; s++;
+                continue;
+            }
+            // Highlight keywords
+            if (strncmp(s, "DIVISION", 8) == 0) {
+                attron(COLOR_PAIR(7) | A_BOLD);
+                for (int k = 0; k < 8; k++)
+                    mvaddch(3 + i, x++, s[k]);
+                attroff(COLOR_PAIR(7) | A_BOLD);
+                s += 8;
+                continue;
+            }
+            if (strncmp(s, "SECTION", 7) == 0) {
+                attron(COLOR_PAIR(7) | A_BOLD);
+                for (int k = 0; k < 7; k++)
+                    mvaddch(3 + i, x++, s[k]);
+                attroff(COLOR_PAIR(7) | A_BOLD);
+                s += 7;
+                continue;
+            }
+            // Highlight numbers
+            if (*s >= '0' && *s <= '9') {
+                attron(COLOR_PAIR(8) | A_BOLD);
+                int start = x;
+                while (*s >= '0' && *s <= '9' && x < FIXED_COLS + MAX_COLS) {
+                    mvaddch(3 + i, x++, *s++);
+                }
+                attroff(COLOR_PAIR(8) | A_BOLD);
+                continue;
+            }
+            // Default color
+            attron(COLOR_PAIR(lines[actual].comment_col == '*' ? 2 : 1));
+            mvaddch(3 + i, x++, *s++);
+            attroff(COLOR_PAIR(1));
+            attroff(COLOR_PAIR(2));
+        }
+        // Fill rest of line
+        while (x < FIXED_COLS + MAX_COLS) {
+            attron(COLOR_PAIR(lines[actual].comment_col == '*' ? 2 : 1));
+            mvaddch(3 + i, x++, ' ');
+            attroff(COLOR_PAIR(1));
+            attroff(COLOR_PAIR(2));
+        }
 
-        mvprintw(3 + i, FIXED_COLS, "%-72s", lines[actual].content);
-
-        attroff(COLOR_PAIR(1));
-        attroff(COLOR_PAIR(2));
-
+        // Cursor highlight
         if (actual == cur_line) {
-            int x = cur_col;
+            int cx = cur_col;
             if (cur_col == 6) {
                 attron(A_REVERSE | COLOR_PAIR(3));
                 mvaddch(3 + i, 6, lines[actual].comment_col);
@@ -216,7 +426,7 @@ void draw_lines() {
                 int pos = cur_col - FIXED_COLS;
                 char c = (pos < (int)strlen(lines[actual].content)) ? lines[actual].content[pos] : ' ';
                 attron(A_REVERSE | COLOR_PAIR(4));
-                mvaddch(3 + i, x, c);
+                mvaddch(3 + i, cx, c);
                 attroff(A_REVERSE | COLOR_PAIR(4));
             }
         }
@@ -258,7 +468,16 @@ void save_file() {
     modified = 0;
 }
 
+void handle_sigint(int sig) {
+    endwin();
+    printf("\033[2J\033[H");
+    fflush(stdout);
+    exit(0);
+}
+
 int main(int argc, char **argv) {
+    signal(SIGINT, handle_sigint);
+
     FILE *structure_check = fopen(".structure", "r");
     if (!structure_check) {
         FILE *structure_file = fopen(".structure", "w");
@@ -309,6 +528,9 @@ int main(int argc, char **argv) {
     init_pair(3, COLOR_RED, COLOR_BLACK);
     init_pair(4, COLOR_WHITE, COLOR_BLACK);
     init_pair(5, COLOR_GREEN, COLOR_BLACK);
+    init_pair(6, COLOR_MAGENTA, COLOR_BLACK); // Strings
+    init_pair(7, COLOR_BLUE, COLOR_BLACK);    // Keywords
+    init_pair(8, COLOR_GREEN, COLOR_BLACK);   // Numbers
 
     init_lines();
 
@@ -366,8 +588,14 @@ int main(int argc, char **argv) {
             case KEY_F(3):
                 renaming = 1;
                 break;
+            case KEY_F(5):
+                show_menu_popup();
+                break;
             case KEY_F(8):
                 confirm_structure = 1;
+                break;
+            case KEY_F(12):
+                run_script_with_gnu_cobol();
                 break;
             case KEY_DOWN:
                 if (cur_line < num_lines - 1) {
@@ -438,6 +666,25 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+            case '\t': // TAB key
+                if (cur_col >= FIXED_COLS) {
+                    int pos = cur_col - FIXED_COLS;
+                    int len = strlen(lines[cur_line].content);
+                    // Check if we have enough space for 4 spaces
+                    if (len + 4 <= MAX_COLS && pos <= len) {
+                        // Shift content to the right
+                        memmove(&lines[cur_line].content[pos + 4], &lines[cur_line].content[pos], len - pos + 1);
+                        // Insert 4 spaces
+                        memset(&lines[cur_line].content[pos], ' ', 4);
+                        cur_col += 4;
+                        // Make sure cursor doesn't exceed limit
+                        if (cur_col > FIXED_COLS + MAX_COLS - 1) {
+                            cur_col = FIXED_COLS + MAX_COLS - 1;
+                        }
+                        modified = 1;
+                    }
+                }
+                break;
             default:
                 if (cur_col == 6 && is_special_comment(ch)) {
                     if (lines[cur_line].comment_col != ch) {
@@ -447,10 +694,35 @@ int main(int argc, char **argv) {
                 } else if (cur_col >= FIXED_COLS && ch >= 32 && ch <= 126) {
                     int pos = cur_col - FIXED_COLS;
                     int len = strlen(lines[cur_line].content);
-                    if (len < MAX_COLS) {
-                        memmove(&lines[cur_line].content[pos + 1], &lines[cur_line].content[pos], len - pos + 1);
+                    
+                    // MAIN FIX: Allow writing even beyond the end of existing content
+                    if (pos < MAX_COLS && len < MAX_COLS) {
+                        // If writing beyond the end, fill with spaces
+                        if (pos > len) {
+                            // Fill with spaces up to the desired position
+                            memset(&lines[cur_line].content[len], ' ', pos - len);
+                            lines[cur_line].content[pos] = '\0'; // Temporarily terminate
+                            len = pos; // Update length
+                        }
+                        
+                        // If inserting in the middle, shift content
+                        if (pos < len) {
+                            memmove(&lines[cur_line].content[pos + 1], &lines[cur_line].content[pos], len - pos + 1);
+                        }
+                        
+                        // Insert the character
                         lines[cur_line].content[pos] = ch;
+                        
+                        // Ensure null termination
+                        if (pos >= len) {
+                            lines[cur_line].content[pos + 1] = '\0';
+                        }
+                        
                         cur_col++;
+                        // Make sure cursor doesn't exceed limit
+                        if (cur_col > FIXED_COLS + MAX_COLS - 1) {
+                            cur_col = FIXED_COLS + MAX_COLS - 1;
+                        }
                         modified = 1;
                     }
                 }
