@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
+#include <ctype.h>
 
 #define MAX_LINES 999999
 #define MAX_COLS 65
@@ -391,8 +392,9 @@ void draw_lines() {
                 s += 7;
                 continue;
             }
-            // Highlight numbers
-            if (*s >= '0' && *s <= '9') {
+            // Highlight numbers (only if NOT part of identifier)
+	        if (*s >= '0' && *s <= '9' &&
+	            (s == lines[actual].content || !(isalnum(*(s - 1)) || *(s - 1) == '-'))) {
                 attron(COLOR_PAIR(8) | A_BOLD);
                 int start = x;
                 while (*s >= '0' && *s <= '9' && x < FIXED_COLS + MAX_COLS) {
