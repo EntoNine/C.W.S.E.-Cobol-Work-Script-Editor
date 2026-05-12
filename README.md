@@ -39,8 +39,8 @@ For best results, use [Sakura terminal](https://github.com/maehne/sakura) which 
 1. Ensure you have `gcc`, `libncurses`, **and [GnuCOBOL](https://gnucobol.sourceforge.io/)** installed.
 2. Clone this repository:
    ```sh
-   git clone https://github.com/yourusername/FAWC.git
-   cd FAWC
+   git clone https://github.com/EntoNine/C.W.S.E.-Cobol-Work-Script-Editor.git
+   cd C.W.S.E.-Cobol-Work-Script-Editor
    ```
 3. Build the program:
    ```sh
