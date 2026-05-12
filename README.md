@@ -1,11 +1,8 @@
 ![FAWC Logo](logo.png)
-
-NEW UPDATE OF CWSE
-
 # Cobol Work Script Editor (CWSE) V0.3 
 
 ## NEW FUNCTIONALITIES :  
--
+
 - Debug Script
 - Color & Layout Re-Adjusted
 - Generally more stable
