@@ -4,7 +4,7 @@ NEW UPDATE OF CWSE
 
 # Cobol Work Script Editor (CWSE) V0.3 
 
-** NEW FUNCTIONALITIES : **  
+## NEW FUNCTIONALITIES :  
 -
 - Debug Script
 - Color & Layout Re-Adjusted
