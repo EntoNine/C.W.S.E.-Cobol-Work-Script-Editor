@@ -1,6 +1,15 @@
 ![FAWC Logo](logo.png)
 
-# Cobol Work Script Editor (CWSE) V0.2
+NEW UPDATE OF CWSE
+
+# Cobol Work Script Editor (CWSE) V0.3 
+
+** NEW FUNCTIONALITIES : **  
+- Debug Script
+- Color & Layout Re-Adjusted
+- Generally more stable
+  
+
 
 A simple ncurses-based editor for COBOL scripts.
 
@@ -64,14 +73,13 @@ If the file does not exist, it will be created.
 | Backspace   | Delete character/line        |
 | Delete      | Delete character/line        |
 | TAB         | Insert 4 spaces              |
-| Q           | Quit Tools/Help menu         |
 
 ## Tools/Help Menu (F5)
 
-- Scrollable reference for COBOL picture clauses
-- List of reserved words
-- Usage tips and links
-- Use UP/DOWN or j/k to scroll, Q to quit
+- File Operation (Rename & Save)
+- Compilation Options (Compile & Run, Compile and Debug)
+- Insert COBOL Structure
+- Keyboard Shortcut/all menu related functionalities
 
 ## Compilation & Execution
 
@@ -87,6 +95,7 @@ Pull requests and suggestions are welcome! Please open an issue for bugs or feat
 
 This project is licensed under the MIT License.
 
-## Credits
+## Credits & Contribution
 
-Developed by Ento9.
+Originally made by Ento9
+Contributor: Mds711
