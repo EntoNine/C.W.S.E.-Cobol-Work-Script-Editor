@@ -13,7 +13,7 @@ A simple ncurses-based editor for COBOL scripts.
 
 ## Preview
 
-![Program Preview](preview.png)
+![Program Preview](preview-image.png)
 
 ## Terminal Compatibility
 
