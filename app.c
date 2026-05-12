@@ -26,9 +26,98 @@ char old_filename[256] = "";
 int renaming = 0;
 int confirm_structure = 0;
 int modified = 0;
+int selected_menu_item = 0;
 
 int is_special_comment(char c) {
     return c == '*' || c == '-' || c == '/';
+}
+
+// Generic menu display function with arrow navigation
+typedef struct {
+    char *label;
+    int shortcut;
+} MenuItem;
+
+static void close_menu(WINDOW *menu, WINDOW *parent) {
+    werase(menu);
+    wrefresh(menu);
+    delwin(menu);
+    clearok(stdscr, TRUE);
+    if (parent) {
+        touchwin(parent);
+        wrefresh(parent);
+    } else {
+        touchwin(stdscr);
+        refresh();
+    }
+}
+
+int show_interactive_menu(WINDOW *parent, const char *title, MenuItem items[], int item_count) {
+    int win_height = item_count + 6;
+    int win_width = 50;
+    int starty = (LINES - win_height) / 2;
+    int startx = (COLS - win_width) / 2;
+
+    WINDOW *menu = newwin(win_height, win_width, starty, startx);
+    if (!menu) return -1;
+
+    wbkgd(menu, COLOR_PAIR(4));
+    keypad(menu, TRUE);
+    clearok(menu, TRUE);
+
+    box(menu, 0, 0);
+
+    wattron(menu, A_BOLD | COLOR_PAIR(5));
+    mvwprintw(menu, 1, (win_width - (int)strlen(title)) / 2, "%s", title);
+    wattroff(menu, A_BOLD | COLOR_PAIR(5));
+
+    for (int x = 1; x < win_width - 1; x++) {
+        mvwaddch(menu, 2, x, '-');
+    }
+
+    int selected = 0;
+    int ch;
+
+    while (1) {
+        box(menu, 0, 0);
+
+        for (int i = 0; i < item_count; i++) {
+            mvwprintw(menu, 3 + i, 3, "%-*s", win_width - 6, "");
+            if (i == selected) {
+                wattron(menu, A_REVERSE | COLOR_PAIR(5));
+                mvwprintw(menu, 3 + i, 3, " > %-*s", win_width - 8, items[i].label);
+                wattroff(menu, A_REVERSE | COLOR_PAIR(5));
+            } else {
+                wattron(menu, COLOR_PAIR(1));
+                mvwprintw(menu, 3 + i, 3, "   %-*s", win_width - 8, items[i].label);
+                wattroff(menu, COLOR_PAIR(1));
+            }
+        }
+
+        mvwprintw(menu, item_count + 4, 3, "ESC to cancel");
+        wrefresh(menu);
+
+        ch = wgetch(menu);
+
+        if (ch == KEY_UP) {
+            selected = (selected - 1 + item_count) % item_count;
+        } else if (ch == KEY_DOWN) {
+            selected = (selected + 1) % item_count;
+        } else if (ch == '\n' || ch == ' ') {
+            close_menu(menu, parent);
+            return selected;
+        } else if (ch == 27) {
+            close_menu(menu, parent);
+            return -1;
+        } else {
+            for (int i = 0; i < item_count; i++) {
+                if (ch == items[i].shortcut) {
+                    close_menu(menu, parent);
+                    return i;
+                }
+            }
+        }
+    }
 }
 
 void rtrim(char *str) {
@@ -38,11 +127,19 @@ void rtrim(char *str) {
 }
 
 void load_file(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return;
     strncpy(filename, path, 255);
     strncpy(old_filename, path, 255);
     filename[255] = old_filename[255] = '\0';
+    
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        // File doesn't exist, start with empty content
+        num_lines = 1;
+        lines[0].comment_col = ' ';
+        lines[0].content[0] = '\0';
+        modified = 0;
+        return;
+    }
 
     num_lines = 0;
     char line[256];
@@ -137,14 +234,18 @@ int delete_line(int index) {
 }
 
 void show_run_output(const char *output) {
-    int win_height = LINES / 2;
+    int win_height = LINES - 6;
     int win_width = COLS - 4;
-    int starty = (LINES - win_height) / 2;
+    int starty = 3;
     int startx = 2;
     WINDOW *popup = newwin(win_height, win_width, starty, startx);
     wbkgd(popup, COLOR_PAIR(4));
     box(popup, 0, 0);
-    mvwprintw(popup, 0, 2, " Output (F12:Run) - [UP/DOWN] Scroll, F4 to quit ");
+    
+    // Draw title bar
+    wattron(popup, A_BOLD | COLOR_PAIR(5));
+    mvwprintw(popup, 0, 2, " === Resultat de l'Execution === ");
+    wattroff(popup, A_BOLD | COLOR_PAIR(5));
 
     // Split output into lines
     char *lines[1024];
@@ -164,22 +265,46 @@ void show_run_output(const char *output) {
     }
 
     int scroll = 0;
-    int max_scroll = (nlines > win_height - 2) ? nlines - (win_height - 2) : 0;
+    int max_scroll = (nlines > win_height - 4) ? nlines - (win_height - 4) : 0;
     int ch;
     keypad(popup, TRUE);
     do {
         werase(popup);
         box(popup, 0, 0);
-        mvwprintw(popup, 0, 2, " Output (F12:Run) - [UP/DOWN] Scroll, F4 to quit ");
-        for (int i = 0; i < win_height - 2; i++) {
-            if (i + scroll < nlines)
-                mvwprintw(popup, i + 1, 2, "%s", lines[i + scroll]);
+        
+        wattron(popup, A_BOLD | COLOR_PAIR(5));
+        mvwprintw(popup, 0, 2, " === Execution Result === ");
+        wattroff(popup, A_BOLD | COLOR_PAIR(5));
+        
+        wattron(popup, COLOR_PAIR(1));
+        for (int i = 0; i < win_height - 4; i++) {
+            if (i + scroll < nlines) {
+                // Highlight error lines
+                if (strstr(lines[i + scroll], "ERROR") || strstr(lines[i + scroll], "error")) {
+                    wattron(popup, COLOR_PAIR(3) | A_BOLD);
+                    mvwprintw(popup, i + 2, 2, "%s", lines[i + scroll]);
+                    wattroff(popup, COLOR_PAIR(3) | A_BOLD);
+                } else if (strstr(lines[i + scroll], "[OK]")) {
+                    wattron(popup, COLOR_PAIR(5));
+                    mvwprintw(popup, i + 2, 2, "%s", lines[i + scroll]);
+                    wattroff(popup, COLOR_PAIR(5));
+                } else {
+                    mvwprintw(popup, i + 2, 2, "%s", lines[i + scroll]);
+                }
+            }
         }
+        wattroff(popup, COLOR_PAIR(1));
+        
+        // Draw footer
+        wattron(popup, COLOR_PAIR(6));
+        mvwprintw(popup, win_height - 2, 2, "^v Scroll | ESC/F4 Close");
+        wattroff(popup, COLOR_PAIR(6));
+        
         wrefresh(popup);
         ch = wgetch(popup);
         if ((ch == KEY_DOWN || ch == 'j') && scroll < max_scroll) scroll++;
         if ((ch == KEY_UP || ch == 'k') && scroll > 0) scroll--;
-    } while (ch != KEY_F(4));
+    } while (ch != KEY_F(4) && ch != 27);
 
     delwin(popup);
     free(buf);
@@ -236,6 +361,8 @@ void run_script_with_gnu_cobol() {
     // Restart ncurses
     refresh();
     initscr();
+    set_escdelay(25);
+    printf("\033[6 q"); // Set cursor to block
     printf("\033[2J\033[H"); // Clear terminal after ncurses is re-initialized
     noecho();
     cbreak();
@@ -256,47 +383,265 @@ void run_script_with_gnu_cobol() {
     init_pair(8, COLOR_GREEN, COLOR_BLACK);   // Numbers
 }
 
-void show_menu_popup() {
-    int win_height = 10;
-    int win_width = 40;
+void show_compile_options() {
+    MenuItem items[] = {
+        {"Compile and Run (F12)", '1'},
+        {"Compile Only", '2'},
+        {"Compile with Debug", '3'}
+    };
+    
+    int choice = show_interactive_menu(NULL, " === Compilation Options === ", items, 3);
+    
+    if (choice == -1) return;
+    
+    save_file();
+    char safe_filename[236];
+    strncpy(safe_filename, filename, 235);
+    safe_filename[235] = '\0';
+    const char *bin_name = "cwse_run_bin";
+    
+    if (choice == 0) {
+        // Compile and Run
+        run_script_with_gnu_cobol();
+    } else if (choice == 1) {
+        // Compile only
+        char compile_cmd[512];
+        snprintf(compile_cmd, sizeof(compile_cmd),
+            "cobc -x -o %s \"%s\" 2>&1", bin_name, safe_filename);
+        FILE *fp = popen(compile_cmd, "r");
+        if (!fp) {
+            show_run_output("Error: Failed to run compiler.");
+            return;
+        }
+        char compile_output[4096] = {0};
+        size_t offset = 0;
+        while (fgets(compile_output + offset, sizeof(compile_output) - offset, fp)) {
+            offset = strlen(compile_output);
+            if (offset >= sizeof(compile_output) - 1) break;
+        }
+        int compile_status = pclose(fp);
+        if (compile_status != 0) {
+            show_run_output(compile_output[0] ? compile_output : "ERROR: COBOL compilation failed.");
+        } else {
+            show_run_output("[OK] Compilation successful!");
+        }
+    } else if (choice == 2) {
+        // Compile with debug
+        char compile_cmd[512];
+        snprintf(compile_cmd, sizeof(compile_cmd),
+            "cobc -x -g -o %s \"%s\" 2>&1", bin_name, safe_filename);
+        FILE *fp = popen(compile_cmd, "r");
+        if (!fp) {
+            show_run_output("Error: Failed to run compiler.");
+            return;
+        }
+        char compile_output[4096] = {0};
+        size_t offset = 0;
+        while (fgets(compile_output + offset, sizeof(compile_output) - offset, fp)) {
+            offset = strlen(compile_output);
+            if (offset >= sizeof(compile_output) - 1) break;
+        }
+        int compile_status = pclose(fp);
+        if (compile_status != 0) {
+            show_run_output(compile_output[0] ? compile_output : "ERROR: COBOL compilation failed.");
+        } else {
+            show_run_output("[OK] Debug compilation successful!");
+        }
+    }
+}
+
+void show_file_operations() {
+    MenuItem items[] = {
+        {"Save (F2)", '1'},
+        {"Rename File (F3)", '2'}
+    };
+    
+    int choice = show_interactive_menu(NULL, " === File Operations === ", items, 2);
+    
+    if (choice == -1) return;
+    
+    if (choice == 0) {
+        save_file();
+    } else if (choice == 1) {
+        renaming = 1;
+    }
+}
+
+void show_help_info() {
+    int win_height = 18;
+    int win_width = 60;
     int starty = (LINES - win_height) / 2;
     int startx = (COLS - win_width) / 2;
-    WINDOW *menu = newwin(win_height, win_width, starty, startx);
-    wbkgd(menu, COLOR_PAIR(4));
-    box(menu, 0, 0);
-    mvwprintw(menu, 1, 2, " CWSE Menu (F5 to close) ");
-    mvwprintw(menu, 3, 4, "1. Future Functionality");
-    mvwprintw(menu, 4, 4, "2. Future Functionality");
-    mvwprintw(menu, 5, 4, "3. Future Functionality");
-    mvwprintw(menu, 6, 4, "4. Future Functionality");
-    mvwprintw(menu, 8, 4, "Press F5 to close.");
-    wrefresh(menu);
-
+    WINDOW *help = newwin(win_height, win_width, starty, startx);
+    wbkgd(help, COLOR_PAIR(5));
+    box(help, ACS_VLINE, ACS_HLINE);
+    
+    // Draw title with colors
+    wattron(help, A_BOLD | COLOR_PAIR(5));
+    mvwprintw(help, 1, 2, "+======================================================+");
+    mvwprintw(help, 2, 2, "|   C.W.S.E. - COBOL Work Script Editor v0.3           |");
+    mvwprintw(help, 3, 2, "+======================================================+");
+    wattroff(help, A_BOLD | COLOR_PAIR(5));
+    
+    wattron(help, COLOR_PAIR(1));
+    mvwprintw(help, 5, 4, "Keyboard Shortcuts:");
+    mvwprintw(help, 6, 6, "F2      - Save File");
+    mvwprintw(help, 7, 6, "F3      - Rename File");
+    mvwprintw(help, 8, 6, "F5      - Open main menu");
+    mvwprintw(help, 9, 6, "F8      - Insert COBOL structure");
+    mvwprintw(help, 10, 6, "F12     - Compile and run");
+    mvwprintw(help, 11, 6, "ESC     - Quit editor");
+    mvwprintw(help, 12, 6, "TAB     - Insert indentation");
+    mvwprintw(help, 13, 6, "Arrows  - Navigate");
+    
+    wattron(help, COLOR_PAIR(6));
+    mvwprintw(help, 15, 4, "[OK] Press any key to close");
+    wattroff(help, COLOR_PAIR(6));
+    
+    wrefresh(help);
+    
     int ch;
-    keypad(menu, TRUE);
-    do {
-        ch = wgetch(menu);
-    } while (ch != KEY_F(5));
-    delwin(menu);
+    keypad(help, TRUE);
+    getch();
+    delwin(help);
+}
+
+void show_menu_popup() {
+    while (1) {
+        MenuItem items[] = {
+            {"File Operations", '1'},
+            {"Compilation Options", '2'},
+            {"Insert COBOL Structure (F8)", '3'},
+            {"Keyboard Shortcuts", '4'}
+        };
+        int choice = show_interactive_menu(NULL, " === Main Menu CWSE === ", items, 4);
+        if (choice == -1) return;
+
+        if (choice == 0) {
+            // File Operations
+            while (1) {
+                MenuItem file_items[] = {
+                    {"Save (F2)", '1'},
+                    {"Rename File (F3)", '2'},
+                    {"< Back", '0'}
+                };
+                int fchoice = show_interactive_menu(NULL, " === File Operations === ", file_items, 3);
+                if (fchoice == -1) return;  // ESC = ferme tout
+                if (fchoice == 2) break;    // < Back = retour menu principal
+                if (fchoice == 0) { save_file(); return; }
+                if (fchoice == 1) { renaming = 1; return; }
+            }
+
+        } else if (choice == 1) {
+            // Compilation Options
+            while (1) {
+                MenuItem comp_items[] = {
+                    {"Compile and Run (F12)", '1'},
+                    {"Compile Only", '2'},
+                    {"Compile with Debug", '3'},
+                    {"< Back", '0'}
+                };
+                int cchoice = show_interactive_menu(NULL, " === Compilation Options === ", comp_items, 4);
+                if (cchoice == -1) return;  // ESC = ferme tout
+                if (cchoice == 3) break;    // < Back = retour menu principal
+                if (cchoice == 0) { run_script_with_gnu_cobol(); return; }
+                if (cchoice == 1) {
+                    save_file();
+                    char compile_cmd[512];
+                    snprintf(compile_cmd, sizeof(compile_cmd),
+                        "cobc -x -o cwse_run_bin \"%s\" 2>&1", filename);
+                    FILE *fp = popen(compile_cmd, "r");
+                    char out[4096] = {0}; size_t off = 0;
+                    while (fgets(out + off, sizeof(out) - off, fp)) off = strlen(out);
+                    int st = pclose(fp);
+                    show_run_output(st != 0 ? (out[0] ? out : "ERROR: Compilation failed.") : "[OK] Compilation successful!");
+                }
+                if (cchoice == 2) {
+                    save_file();
+
+                    char base[256];
+                    strncpy(base, filename, 255);
+                    base[255] = '\0';
+                    char *slash = strrchr(base, '/');
+                    if (slash) memmove(base, slash + 1, strlen(slash + 1) + 1);
+                    char *dot = strrchr(base, '.');
+                    if (dot) *dot = '\0';
+
+                    char debug_dir[320];
+                    snprintf(debug_dir, sizeof(debug_dir), "debug_%s", filename);
+                    char mkdir_cmd[400];
+                    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", debug_dir);
+                    system(mkdir_cmd);
+
+                    char bin_path[600];
+                    snprintf(bin_path, sizeof(bin_path), "%s/%s", debug_dir, base);
+                    char compile_cmd[900];
+                    snprintf(compile_cmd, sizeof(compile_cmd),
+                        "cobc -x -g -save-temps -o \"%s\" \"%s\" 2>&1",
+                        bin_path, filename);
+                    FILE *fp = popen(compile_cmd, "r");
+                    char out[4096] = {0}; size_t off = 0;
+                    while (fgets(out + off, sizeof(out) - off, fp)) off = strlen(out);
+                    int st = pclose(fp);
+
+                    char mv_cmd[2500];
+                    snprintf(mv_cmd, sizeof(mv_cmd), "mv -f \"%s\".c \"%s/\" 2>/dev/null", base, debug_dir);
+                    system(mv_cmd);
+                    snprintf(mv_cmd, sizeof(mv_cmd), "mv -f \"%s\".c.h \"%s/\" 2>/dev/null", base, debug_dir);
+                    system(mv_cmd);
+                    snprintf(mv_cmd, sizeof(mv_cmd), "mv -f \"%s\".c.l.h \"%s/\" 2>/dev/null", base, debug_dir);
+                    system(mv_cmd);
+                    snprintf(mv_cmd, sizeof(mv_cmd), "mv -f \"%s\".i \"%s/\" 2>/dev/null", base, debug_dir);
+                    system(mv_cmd);
+                    snprintf(mv_cmd, sizeof(mv_cmd), "mv -f \"%s\".o \"%s/\" 2>/dev/null", base, debug_dir);
+                    system(mv_cmd);
+
+                    char result[4300];
+                    if (st != 0) {
+                        snprintf(result, sizeof(result), "%s",
+                            out[0] ? out : "ERROR: Compilation failed.");
+                    } else {
+                        snprintf(result, sizeof(result),
+                            "[OK] Debug compilation successful!\n\nFiles saved in: %s/\n  - %s (binary)\n  - %s.c\n  - %s.c.h\n  - %s.c.l.h\n  - %s.i\n  - %s.o",
+                            debug_dir, base, base, base, base, base, base);
+                    }
+                    show_run_output(result);
+                }
+            }
+
+        } else if (choice == 2) {
+            confirm_structure = 1;
+            return;
+        } else if (choice == 3) {
+            show_help_info();
+        }
+    }
 }
 
 void draw_header() {
     attron(COLOR_PAIR(4));
-    mvprintw(0, 0, "C.W.S.E. V0.2 ");
-    // F5:MENU and F12:Run top-right
-    int run_label_col = COLS - 13;
-    int menu_label_col = run_label_col - 13;
-    attron(COLOR_PAIR(4) | A_REVERSE);
-    mvprintw(0, menu_label_col, " F5: MENU ");
-    attroff(A_REVERSE | COLOR_PAIR(4));
-    attron(COLOR_PAIR(4) | A_REVERSE);
-    mvprintw(0, run_label_col, " F12: Run ");
-    attroff(A_REVERSE | COLOR_PAIR(4));
+    mvprintw(0, 0, " C.W.S.E. - COBOL Editor v0.3 ");
+
+    char status[50];
+    snprintf(status, sizeof(status), "Line %d | Col %d", cur_line + 1, cur_col + 1);
+    mvprintw(0, COLS - strlen(status) - 2, "%s", status);
+    
+    // Display current filename
+    char short_name[30];
+    size_t len = strlen(filename);
+    if (len > 25) {
+        strncpy(short_name, filename, 22);
+        strcpy(short_name + 22, "...");
+    } else {
+        strcpy(short_name, filename);
+    }
+    
     clrtoeol();
     attroff(COLOR_PAIR(4));
-    attron(A_BOLD | COLOR_PAIR(5));
+    
+    attron(A_BOLD | COLOR_PAIR(2));
     mvprintw(1, 0, "----+----1----+----2----+----3----+----4----+----5----+----6----+----7--");
-    attroff(A_BOLD | COLOR_PAIR(5));
+    attroff(A_BOLD | COLOR_PAIR(2));
 }
 
 void draw_top_of_data() {
@@ -307,12 +652,12 @@ void draw_top_of_data() {
 
 void draw_footer() {
     int row = LINES - 1;
-    attron(A_REVERSE);
-    mvprintw(row, 0, "F2:Save  F3:Rename  ESC:Quit  F8:Insert Structure");
+    attron(A_REVERSE | COLOR_PAIR(4));
+    mvprintw(row, 0, "[F2]Save  [F3]Rename  [F5]Menu  [F8]Struct  [F12]Run  [ESC]Quit");
 
     char short_name[256];
     size_t len = strlen(filename);
-    int max_len = 22;
+    int max_len = 20;
 
     if (len > max_len) {
         if (modified) {
@@ -334,7 +679,7 @@ void draw_footer() {
 
     mvprintw(row, COLS - strlen(short_name) - 2, "%s", short_name);
     clrtoeol();
-    attroff(A_REVERSE);
+    attroff(A_REVERSE | COLOR_PAIR(4));
 }
 
 void draw_lines() {
@@ -517,6 +862,7 @@ int main(int argc, char **argv) {
     }
 
     initscr();
+    printf("\033[6 q");
     noecho();
     cbreak();
     keypad(stdscr, TRUE);
@@ -538,6 +884,7 @@ int main(int argc, char **argv) {
 
     int ch;
     while (1) {
+        clearok(stdscr, TRUE); 
         erase();
         draw_header();
         draw_top_of_data();
