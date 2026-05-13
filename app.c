@@ -15,6 +15,8 @@ typedef struct {
     char content[MAX_COLS + 1];
 } Line;
 
+int is_cobol_file();
+
 Line lines[MAX_LINES];
 int num_lines = 0;
 int cur_line = 0;
@@ -133,7 +135,6 @@ void load_file(const char *path) {
     
     FILE *f = fopen(path, "r");
     if (!f) {
-        // File doesn't exist, start with empty content
         num_lines = 1;
         lines[0].comment_col = ' ';
         lines[0].content[0] = '\0';
@@ -142,17 +143,25 @@ void load_file(const char *path) {
     }
 
     num_lines = 0;
-    char line[256];
+    char line[512];
+    int is_cob = is_cobol_file();
+
     while (fgets(line, sizeof(line), f) && num_lines < MAX_LINES) {
         rtrim(line);
-        int len = strlen(line);
-        if (len < 7) {
-            // Short or empty line -> empty comment column + empty content
-            lines[num_lines].comment_col = ' ';
-            lines[num_lines].content[0] = '\0';
+        if (is_cob) {
+            int len = strlen(line);
+            if (len < 7) {
+                lines[num_lines].comment_col = ' ';
+                lines[num_lines].content[0] = '\0';
+            } else {
+                lines[num_lines].comment_col = line[6];
+                strncpy(lines[num_lines].content, &line[7], MAX_COLS);
+                lines[num_lines].content[MAX_COLS] = '\0';
+            }
         } else {
-            lines[num_lines].comment_col = line[6];
-            strncpy(lines[num_lines].content, &line[7], MAX_COLS);
+            // Mode texte normal : pas de colonne de commentaire, tout dans content
+            lines[num_lines].comment_col = ' ';
+            strncpy(lines[num_lines].content, line, MAX_COLS);
             lines[num_lines].content[MAX_COLS] = '\0';
         }
         num_lines++;
@@ -656,34 +665,55 @@ void draw_footer() {
     mvprintw(row, 0, "[F2]Save  [F3]Rename  [F5]Menu  [F8]Struct  [F12]Run  [ESC]Quit");
 
     char short_name[256];
-    size_t len = strlen(filename);
-    int max_len = 20;
+    int max_len = 25; // Longueur max d'affichage pour le nom
 
+    // --- EXTRACTION DU NOM SEUL ---
+    const char *display_name = strrchr(filename, '/'); 
+    if (display_name) {
+        display_name++; // On avance de 1 pour sauter le '/'
+    } else {
+        display_name = filename; // Pas de '/' trouvé, on utilise le nom tel quel
+    }
+
+    size_t len = strlen(display_name);
+
+    // Gestion de l'affichage (tronquage + indicateur de modification)
     if (len > max_len) {
         if (modified) {
             short_name[0] = '*';
-            strncpy(short_name + 1, filename, max_len);
-            memcpy(short_name + 1 + max_len, "...", 4);
+            strncpy(short_name + 1, display_name, max_len - 3);
+            short_name[max_len - 2] = '\0';
+            strcat(short_name, "...");
         } else {
-            strncpy(short_name, filename, max_len);
-            memcpy(short_name + max_len, "...", 4);
+            strncpy(short_name, display_name, max_len - 3);
+            short_name[max_len - 3] = '\0';
+            strcat(short_name, "...");
         }
     } else {
         if (modified) {
             short_name[0] = '*';
-            strcpy(short_name + 1, filename);
+            strcpy(short_name + 1, display_name);
         } else {
-            strcpy(short_name, filename);
+            strcpy(short_name, display_name);
         }
     }
 
+    // Affichage à droite du footer
     mvprintw(row, COLS - strlen(short_name) - 2, "%s", short_name);
     clrtoeol();
     attroff(A_REVERSE | COLOR_PAIR(4));
 }
 
+int is_cobol_file() {
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return 0;
+    return (strcasecmp(ext, ".cob") == 0 || strcasecmp(ext, ".cbl") == 0 || strcasecmp(ext, ".cpy") == 0);
+}
+
 void draw_lines() {
     int visible = LINES - 5;
+    int is_cob = is_cobol_file(); // On vérifie si c'est du COBOL une seule fois
+
     for (int i = 0; i < visible; i++) {
         int actual = i + scroll_offset;
         if (actual >= num_lines) break;
@@ -696,64 +726,63 @@ void draw_lines() {
         mvaddch(3 + i, 6, lines[actual].comment_col);
         attroff(COLOR_PAIR(3));
 
-        // Syntax highlighting for content
         int x = FIXED_COLS;
         const char *s = lines[actual].content;
         int in_string = 0;
         char string_char = 0;
+
         while (*s && x < FIXED_COLS + MAX_COLS) {
-            // Check for string start/end
-            if (!in_string && (*s == '"' || *s == '\'')) {
-                in_string = 1;
-                string_char = *s;
-                attron(COLOR_PAIR(6));
-                mvaddch(3 + i, x++, *s++);
-                continue;
-            }
-            if (in_string) {
-                attron(COLOR_PAIR(6));
-                mvaddch(3 + i, x, *s);
-                if (*s == string_char) {
-                    in_string = 0;
-                    attroff(COLOR_PAIR(6));
-                }
-                x++; s++;
-                continue;
-            }
-            // Highlight keywords
-            if (strncmp(s, "DIVISION", 8) == 0) {
-                attron(COLOR_PAIR(7) | A_BOLD);
-                for (int k = 0; k < 8; k++)
-                    mvaddch(3 + i, x++, s[k]);
-                attroff(COLOR_PAIR(7) | A_BOLD);
-                s += 8;
-                continue;
-            }
-            if (strncmp(s, "SECTION", 7) == 0) {
-                attron(COLOR_PAIR(7) | A_BOLD);
-                for (int k = 0; k < 7; k++)
-                    mvaddch(3 + i, x++, s[k]);
-                attroff(COLOR_PAIR(7) | A_BOLD);
-                s += 7;
-                continue;
-            }
-            // Highlight numbers (only if NOT part of identifier)
-	        if (*s >= '0' && *s <= '9' &&
-	            (s == lines[actual].content || !(isalnum(*(s - 1)) || *(s - 1) == '-'))) {
-                attron(COLOR_PAIR(8) | A_BOLD);
-                int start = x;
-                while (*s >= '0' && *s <= '9' && x < FIXED_COLS + MAX_COLS) {
+            // SI FICHIER COBOL : On applique toute ta logique de highlight
+            if (is_cob) {
+                // Check for string start/end
+                if (!in_string && (*s == '"' || *s == '\'')) {
+                    in_string = 1;
+                    string_char = *s;
+                    attron(COLOR_PAIR(6));
                     mvaddch(3 + i, x++, *s++);
+                    continue;
                 }
-                attroff(COLOR_PAIR(8) | A_BOLD);
-                continue;
+                if (in_string) {
+                    attron(COLOR_PAIR(6));
+                    mvaddch(3 + i, x, *s);
+                    if (*s == string_char) {
+                        in_string = 0;
+                        attroff(COLOR_PAIR(6));
+                    }
+                    x++; s++;
+                    continue;
+                }
+                // Highlight keywords
+                if (strncmp(s, "DIVISION", 8) == 0) {
+                    attron(COLOR_PAIR(7) | A_BOLD);
+                    for (int k = 0; k < 8; k++) mvaddch(3 + i, x++, s[k]);
+                    attroff(COLOR_PAIR(7) | A_BOLD);
+                    s += 8; continue;
+                }
+                if (strncmp(s, "SECTION", 7) == 0) {
+                    attron(COLOR_PAIR(7) | A_BOLD);
+                    for (int k = 0; k < 7; k++) mvaddch(3 + i, x++, s[k]);
+                    attroff(COLOR_PAIR(7) | A_BOLD);
+                    s += 7; continue;
+                }
+                // Highlight numbers
+                if (*s >= '0' && *s <= '9' && (s == lines[actual].content || !(isalnum(*(s - 1)) || *(s - 1) == '-'))) {
+                    attron(COLOR_PAIR(8) | A_BOLD);
+                    while (*s >= '0' && *s <= '9' && x < FIXED_COLS + MAX_COLS) {
+                        mvaddch(3 + i, x++, *s++);
+                    }
+                    attroff(COLOR_PAIR(8) | A_BOLD);
+                    continue;
+                }
             }
-            // Default color
+
+            // Couleur par défaut (utilisée si pas COBOL OU si aucun mot-clé trouvé)
             attron(COLOR_PAIR(lines[actual].comment_col == '*' ? 2 : 1));
             mvaddch(3 + i, x++, *s++);
             attroff(COLOR_PAIR(1));
             attroff(COLOR_PAIR(2));
         }
+
         // Fill rest of line
         while (x < FIXED_COLS + MAX_COLS) {
             attron(COLOR_PAIR(lines[actual].comment_col == '*' ? 2 : 1));
@@ -762,7 +791,7 @@ void draw_lines() {
             attroff(COLOR_PAIR(2));
         }
 
-        // Cursor highlight
+        // Cursor highlight (inchangé)
         if (actual == cur_line) {
             int cx = cur_col;
             if (cur_col == 6) {
@@ -804,12 +833,20 @@ void save_file() {
     FILE *f = fopen(filename, "w");
     if (!f) return;
 
+    int is_cob = is_cobol_file();
+
     for (int i = 0; i < num_lines; i++) {
         rtrim(lines[i].content);
-        if (is_special_comment(lines[i].comment_col))
-            fprintf(f, "%06d%c%s\n", i + 1, lines[i].comment_col, lines[i].content);
-        else
-            fprintf(f, "%06d %s\n", i + 1, lines[i].content);
+        if (is_cob) {
+            // Format COBOL : 000001*CONTENU
+            if (is_special_comment(lines[i].comment_col))
+                fprintf(f, "%06d%c%s\n", i + 1, lines[i].comment_col, lines[i].content);
+            else
+                fprintf(f, "%06d %s\n", i + 1, lines[i].content);
+        } else {
+            // Format Texte : CONTENU pur
+            fprintf(f, "%s\n", lines[i].content);
+        }
     }
     fclose(f);
     modified = 0;
